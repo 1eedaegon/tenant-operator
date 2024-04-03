@@ -47,9 +47,42 @@ type TenantReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.17.0/pkg/reconcile
 func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	log := log.FromContext(ctx)
 
 	// TODO(user): your logic here
+	tenant := &multitenancyv1.Tenant{}
+	log.Info("Reconciling tenant")
+
+	if err := r.Get(ctx, req.NamespacedName, tenant); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	for _, ns := range tenant.Spec.Namespaces {
+		log.Info("Ensuring Namespace", "namespace", ns)
+		if err := r.ensureNamespace(ctx, tenant, ns); err != nil {
+			log.Error(err, "unable to ensure Namespace")
+			return ctrl.Result{}, err
+		}
+
+		log.Info("Ensuring Admin RoleBinding", "namespace", ns)
+		if err := r.EnsureRoleBinding(ctx, ns, tenant.Spec.AdminGroups, "admin"); err != nil {
+			log.Error(err, "unable to ensure Admin Rolebinding")
+			return ctrl.Result{}, err
+		}
+
+		log.Info("Ensuring User RoleBinding", "namespace", ns)
+		if err := r.EnsureRoleBinding(ctx, ns, tenant.Spec.UserGroups, "edit"); err != nil {
+			log.Error(err, "unable to ensure User Rolebinding")
+			return ctrl.Result{}, err
+		}
+	}
+
+	tenant.Status.NamespaceCount = len(tenant.Spec.Namespaces)
+	tenant.Status.AdminEmail = tenant.Spec.AdminEmail
+	if err := r.Status().Update(ctx, tenant); err != nil {
+		log.Error(err, "unable to update tenant status")
+		return ctrl.Result{}, err
+	}
 
 	return ctrl.Result{}, nil
 }
